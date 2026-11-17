@@ -1,0 +1,12 @@
+# Go
+/api/bin/
+/api/tmp/
+
+# React/Vite
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Local configuration
+.env
+.env.*.local
