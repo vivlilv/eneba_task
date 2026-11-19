@@ -32,6 +32,12 @@ type checkoutLine struct {
 	Active         bool
 }
 
+type checkoutSummary struct {
+	totalCents          int64
+	priceChanges        []priceChange
+	unavailableOfferIDs []string
+}
+
 type orderItemView struct {
 	ID             int64   `json:"id"`
 	ProductSlug    string  `json:"productSlug"`
@@ -92,36 +98,17 @@ func (a *App) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	changes := make([]priceChange, 0)
-	unavailable := make([]string, 0)
-	var total int64
-	for _, line := range lines {
-		if !line.Active || line.AvailableKeys == 0 {
-			unavailable = append(unavailable, line.OfferID)
-		}
-		if line.PriceSeenCents != line.PriceCents {
-			changes = append(changes, priceChange{
-				OfferID: line.OfferID, PreviousCents: line.PriceSeenCents,
-				CurrentCents: line.PriceCents, Currency: line.Currency,
-			})
-		}
-		total += line.PriceCents
-	}
-	if len(unavailable) > 0 {
-		writeError(w, http.StatusConflict, "one or more offers are no longer available; no items were purchased", "out_of_stock", map[string]any{"offerIds": unavailable})
+	summary := summarizeCheckoutLines(lines)
+	if len(summary.unavailableOfferIDs) > 0 {
+		writeError(w, http.StatusConflict, "one or more offers are no longer available; no items were purchased", "out_of_stock", map[string]any{"offerIds": summary.unavailableOfferIDs})
 		return
 	}
-	if len(changes) > 0 && !input.ConfirmPriceChanges {
-		writeError(w, http.StatusConflict, "one or more offer prices changed; review and confirm the new total", "price_changed", map[string]any{"changes": changes, "newTotalCents": total, "currency": "EUR"})
+	if len(summary.priceChanges) > 0 && !input.ConfirmPriceChanges {
+		writeError(w, http.StatusConflict, "one or more offer prices changed; review and confirm the new total", "price_changed", map[string]any{"changes": summary.priceChanges, "newTotalCents": summary.totalCents, "currency": "EUR"})
 		return
 	}
 
-	var orderID string
-	err = tx.QueryRowContext(r.Context(), `
-		INSERT INTO orders(user_id, status, currency, total_cents, checkout_key)
-		VALUES ($1, 'pending_payment', 'EUR', $2, $3)
-		RETURNING id::text
-	`, current.ID, total, checkoutKey).Scan(&orderID)
+	orderID, err := insertPendingOrder(r, tx, current.ID, summary.totalCents, checkoutKey)
 	if err != nil {
 		if isUniqueViolation(err) {
 			_ = tx.Rollback()
@@ -133,16 +120,9 @@ func (a *App) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create order", "internal_error", nil)
 		return
 	}
-	for _, line := range lines {
-		_, err := tx.ExecContext(r.Context(), `
-			INSERT INTO order_items(order_id, product_id, offer_id, product_title_snapshot,
-			                        seller_name_snapshot, unit_price_cents)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, orderID, line.ProductID, line.OfferID, line.ProductTitle, line.SellerName, line.PriceCents)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not create order items", "internal_error", nil)
-			return
-		}
+	if err := insertOrderItems(r, tx, orderID, lines); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create order items", "internal_error", nil)
+		return
 	}
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not finish checkout", "internal_error", nil)
@@ -154,6 +134,50 @@ func (a *App) handleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func insertPendingOrder(r *http.Request, tx *sql.Tx, userID int64, totalCents int64, checkoutKey string) (string, error) {
+	var orderID string
+	err := tx.QueryRowContext(r.Context(), `
+		INSERT INTO orders(user_id, status, currency, total_cents, checkout_key)
+		VALUES ($1, 'pending_payment', 'EUR', $2, $3)
+		RETURNING id::text
+	`, userID, totalCents, checkoutKey).Scan(&orderID)
+	return orderID, err
+}
+
+func insertOrderItems(r *http.Request, tx *sql.Tx, orderID string, lines []checkoutLine) error {
+	for _, line := range lines {
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO order_items(order_id, product_id, offer_id, product_title_snapshot,
+			                        seller_name_snapshot, unit_price_cents)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, orderID, line.ProductID, line.OfferID, line.ProductTitle, line.SellerName, line.PriceCents); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// summarizeCheckoutLines computes the current total and identifies price or availability changes.
+func summarizeCheckoutLines(lines []checkoutLine) checkoutSummary {
+	summary := checkoutSummary{
+		priceChanges:        make([]priceChange, 0),
+		unavailableOfferIDs: make([]string, 0),
+	}
+	for _, line := range lines {
+		if !line.Active || line.AvailableKeys == 0 {
+			summary.unavailableOfferIDs = append(summary.unavailableOfferIDs, line.OfferID)
+		}
+		if line.PriceSeenCents != line.PriceCents {
+			summary.priceChanges = append(summary.priceChanges, priceChange{
+				OfferID: line.OfferID, PreviousCents: line.PriceSeenCents,
+				CurrentCents: line.PriceCents, Currency: line.Currency,
+			})
+		}
+		summary.totalCents += line.PriceCents
+	}
+	return summary
 }
 
 func loadCheckoutLines(r *http.Request, tx *sql.Tx, userID int64) ([]checkoutLine, error) {
@@ -238,12 +262,7 @@ func (a *App) handlePay(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not confirm payment", "internal_error", nil)
 			return
 		}
-		result, loadErr := a.loadOrder(r, current.ID, orderID)
-		if loadErr != nil {
-			writeError(w, http.StatusInternalServerError, "could not load order", "internal_error", nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"paymentStatus": previousOutcome, "order": result})
+		a.writePaymentResponse(w, r, current.ID, orderID, previousOutcome, "could not load order")
 		return
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -255,12 +274,7 @@ func (a *App) handlePay(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not confirm payment", "internal_error", nil)
 			return
 		}
-		result, loadErr := a.loadOrder(r, current.ID, orderID)
-		if loadErr != nil {
-			writeError(w, http.StatusInternalServerError, "could not load order", "internal_error", nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"paymentStatus": "succeeded", "order": result})
+		a.writePaymentResponse(w, r, current.ID, orderID, "succeeded", "could not load order")
 		return
 	}
 	if input.Outcome == "declined" {
@@ -275,55 +289,20 @@ func (a *App) handlePay(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not record payment attempt", "internal_error", nil)
 			return
 		}
-		result, loadErr := a.loadOrder(r, current.ID, orderID)
-		if loadErr != nil {
-			writeError(w, http.StatusInternalServerError, "could not load order", "internal_error", nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"paymentStatus": "declined", "order": result})
+		a.writePaymentResponse(w, r, current.ID, orderID, "declined", "could not load order")
 		return
 	}
 
-	rows, err := tx.QueryContext(r.Context(), `
-		SELECT id, offer_id FROM order_items WHERE order_id::text = $1 ORDER BY offer_id FOR UPDATE
-	`, orderID)
+	items, err := loadOrderItemsForPayment(r, tx, orderID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load order items", "internal_error", nil)
 		return
 	}
-	type itemOffer struct {
-		itemID  int64
-		offerID string
-	}
-	items := make([]itemOffer, 0)
-	for rows.Next() {
-		var item itemOffer
-		if err := rows.Scan(&item.itemID, &item.offerID); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "could not load order items", "internal_error", nil)
-			return
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		writeError(w, http.StatusInternalServerError, "could not load order items", "internal_error", nil)
-		return
-	}
-	rows.Close()
 	sort.Slice(items, func(i, j int) bool { return items[i].offerID < items[j].offerID })
-	allocated := make(map[int64]int64, len(items))
+
+	allocatedKeyIDs := make(map[int64]int64, len(items))
 	for _, item := range items {
-		var keyID int64
-		err := tx.QueryRowContext(r.Context(), `
-			SELECT dk.id
-			FROM digital_keys dk
-			WHERE dk.offer_id = $1
-			  AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id)
-			ORDER BY dk.id
-			FOR UPDATE OF dk SKIP LOCKED
-			LIMIT 1
-		`, item.offerID).Scan(&keyID)
+		keyID, err := findAvailableKeyForOffer(r, tx, item.offerID)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusConflict, "an offer has run out of keys; no items were purchased", "out_of_stock", map[string]string{"offerId": item.offerID})
 			return
@@ -332,13 +311,11 @@ func (a *App) handlePay(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not allocate key", "internal_error", nil)
 			return
 		}
-		allocated[item.itemID] = keyID
+		allocatedKeyIDs[item.itemID] = keyID
 	}
-	for itemID, keyID := range allocated {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE order_items SET digital_key_id = $1 WHERE id = $2`, keyID, itemID); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not assign keys", "internal_error", nil)
-			return
-		}
+	if err := assignDigitalKeys(r, tx, allocatedKeyIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not assign keys", "internal_error", nil)
+		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `
 		INSERT INTO payment_attempts(order_id, idempotency_key, status)
@@ -362,12 +339,64 @@ func (a *App) handlePay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not finish payment", "internal_error", nil)
 		return
 	}
-	result, err := a.loadOrder(r, current.ID, orderID)
+	a.writePaymentResponse(w, r, current.ID, orderID, "succeeded", "payment completed but Order could not be loaded")
+}
+
+func (a *App) writePaymentResponse(w http.ResponseWriter, r *http.Request, userID int64, orderID, paymentStatus, loadErrorMessage string) {
+	order, err := a.loadOrder(r, userID, orderID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "payment completed but Order could not be loaded", "internal_error", nil)
+		writeError(w, http.StatusInternalServerError, loadErrorMessage, "internal_error", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"paymentStatus": "succeeded", "order": result})
+	writeJSON(w, http.StatusOK, map[string]any{"paymentStatus": paymentStatus, "order": order})
+}
+
+type paymentOrderItem struct {
+	itemID  int64
+	offerID string
+}
+
+func loadOrderItemsForPayment(r *http.Request, tx *sql.Tx, orderID string) ([]paymentOrderItem, error) {
+	rows, err := tx.QueryContext(r.Context(), `
+		SELECT id, offer_id FROM order_items WHERE order_id::text = $1 ORDER BY offer_id FOR UPDATE
+	`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]paymentOrderItem, 0)
+	for rows.Next() {
+		var item paymentOrderItem
+		if err := rows.Scan(&item.itemID, &item.offerID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func findAvailableKeyForOffer(r *http.Request, tx *sql.Tx, offerID string) (int64, error) {
+	var keyID int64
+	err := tx.QueryRowContext(r.Context(), `
+		SELECT dk.id
+		FROM digital_keys dk
+		WHERE dk.offer_id = $1
+		  AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id)
+		ORDER BY dk.id
+		FOR UPDATE OF dk SKIP LOCKED
+		LIMIT 1
+	`, offerID).Scan(&keyID)
+	return keyID, err
+}
+
+func assignDigitalKeys(r *http.Request, tx *sql.Tx, allocatedKeyIDs map[int64]int64) error {
+	for itemID, keyID := range allocatedKeyIDs {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE order_items SET digital_key_id = $1 WHERE id = $2`, keyID, itemID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) handleListOrders(w http.ResponseWriter, r *http.Request) {
@@ -375,29 +404,11 @@ func (a *App) handleListOrders(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := a.db.QueryContext(r.Context(), `
-		SELECT id::text FROM orders WHERE user_id = $1 AND status = 'paid' ORDER BY created_at DESC LIMIT 50
-	`, current.ID)
+	ids, err := a.loadPaidOrderIDs(r, current.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load Orders", "internal_error", nil)
 		return
 	}
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "could not load Orders", "internal_error", nil)
-			return
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		writeError(w, http.StatusInternalServerError, "could not load Orders", "internal_error", nil)
-		return
-	}
-	rows.Close()
 	orders := make([]orderView, 0, len(ids))
 	for _, id := range ids {
 		order, err := a.loadOrder(r, current.ID, id)
@@ -408,6 +419,26 @@ func (a *App) handleListOrders(w http.ResponseWriter, r *http.Request) {
 		orders = append(orders, order)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
+}
+
+func (a *App) loadPaidOrderIDs(r *http.Request, userID int64) ([]string, error) {
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT id::text FROM orders WHERE user_id = $1 AND status = 'paid' ORDER BY created_at DESC LIMIT 50
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (a *App) handleOrder(w http.ResponseWriter, r *http.Request) {

@@ -32,36 +32,57 @@ type homepageBlock struct {
 	Products []productCard `json:"products"`
 }
 
+// handleHomepage assembles the homepage: every block in display order, each
+// carrying the product cards assigned to it. Blocks and their products are
+// loaded in two passes; each pass keeps its own failure message.
 func (a *App) handleHomepage(w http.ResponseWriter, r *http.Request) {
-	blockRows, err := a.db.QueryContext(r.Context(), `
-		SELECT id, title, kind, eyebrow, body, cta_label, cta_url
-		FROM homepage_blocks ORDER BY position
-	`)
+	blocks, positionByBlockID, err := a.loadHomepageBlocks(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load homepage", "internal_error", nil)
 		return
 	}
-	blocks := make([]homepageBlock, 0)
-	blockIndex := make(map[string]int)
-	for blockRows.Next() {
-		var block homepageBlock
-		if err := blockRows.Scan(&block.ID, &block.Title, &block.Kind, &block.Eyebrow, &block.Body, &block.CTALabel, &block.CTAURL); err != nil {
-			blockRows.Close()
-			writeError(w, http.StatusInternalServerError, "could not load homepage", "internal_error", nil)
-			return
-		}
-		block.Products = make([]productCard, 0)
-		blockIndex[block.ID] = len(blocks)
-		blocks = append(blocks, block)
-	}
-	if err := blockRows.Err(); err != nil {
-		blockRows.Close()
-		writeError(w, http.StatusInternalServerError, "could not load homepage", "internal_error", nil)
+	if err := a.attachBlockProducts(r, blocks, positionByBlockID); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load homepage products", "internal_error", nil)
 		return
 	}
-	blockRows.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
+}
 
-	productRows, err := a.db.QueryContext(r.Context(), `
+// loadHomepageBlocks returns every homepage block in display order (block
+// position), plus a map from block ID to slice position so product rows
+// scanned later can be routed to the block they belong to. Each block starts
+// with a non-nil empty Products slice so JSON encodes [] rather than null.
+func (a *App) loadHomepageBlocks(r *http.Request) ([]homepageBlock, map[string]int, error) {
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT id, title, kind, eyebrow, body, cta_label, cta_url
+		FROM homepage_blocks ORDER BY position
+	`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	blocks := make([]homepageBlock, 0)
+	positionByBlockID := make(map[string]int)
+	for rows.Next() {
+		var block homepageBlock
+		if err := rows.Scan(&block.ID, &block.Title, &block.Kind, &block.Eyebrow, &block.Body, &block.CTALabel, &block.CTAURL); err != nil {
+			return nil, nil, err
+		}
+		block.Products = make([]productCard, 0)
+		positionByBlockID[block.ID] = len(blocks)
+		blocks = append(blocks, block)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return blocks, positionByBlockID, nil
+}
+
+// attachBlockProducts loads all block products in a single query (ordered by
+// block position, then in-block position) and appends each scanned product
+// card to its block. Rows whose block ID is unknown are skipped.
+func (a *App) attachBlockProducts(r *http.Request, blocks []homepageBlock, positionByBlockID map[string]int) error {
+	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT hb.id, p.id, p.slug, p.title, p.edition, p.platform, p.region, p.category,
 		       COALESCE(MIN(o.price_cents), 0), COALESCE(MIN(o.currency), 'EUR'),
 		       COALESCE(BOOL_OR(EXISTS (
@@ -78,32 +99,26 @@ func (a *App) handleHomepage(w http.ResponseWriter, r *http.Request) {
 		ORDER BY hb.position, hbp.position
 	`)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load homepage products", "internal_error", nil)
-		return
+		return err
 	}
-	defer productRows.Close()
-	for productRows.Next() {
+	defer rows.Close()
+	for rows.Next() {
 		var blockID string
 		var product productCard
-		if err := productRows.Scan(
+		if err := rows.Scan(
 			&blockID, &product.ID, &product.Slug, &product.Title, &product.Edition,
 			&product.Platform, &product.Region, &product.Category,
 			&product.LowestPrice, &product.Currency, &product.Available, &product.OfferCount,
 		); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load homepage products", "internal_error", nil)
-			return
+			return err
 		}
 		product.Region = strings.TrimSpace(product.Region)
 		product.Currency = strings.TrimSpace(product.Currency)
-		if index, ok := blockIndex[blockID]; ok {
-			blocks[index].Products = append(blocks[index].Products, product)
+		if position, ok := positionByBlockID[blockID]; ok {
+			blocks[position].Products = append(blocks[position].Products, product)
 		}
 	}
-	if err := productRows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load homepage products", "internal_error", nil)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
+	return rows.Err()
 }
 
 type offerView struct {
@@ -123,8 +138,28 @@ type productDetail struct {
 }
 
 func (a *App) handleProduct(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
+	product, err := a.loadProductSummary(r, r.PathValue("slug"))
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "product not found", "not_found", nil)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load product", "internal_error", nil)
+		return
+	}
+
+	product.Offers, err = a.loadOffersForProduct(r, product.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load offers", "internal_error", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, product)
+}
+
+func (a *App) loadProductSummary(r *http.Request, slug string) (productDetail, error) {
 	var product productDetail
+	//SQL fetches one product by slug and computes summary values from its active offers: lowest listed price, a currency,
+	//whether any offer has an unsold digital key, and how many active offers exist
 	err := a.db.QueryRowContext(r.Context(), `
 		SELECT p.id, p.slug, p.title, p.edition, p.platform, p.region, p.category, p.description,
 		       COALESCE(MIN(o.price_cents), 0), COALESCE(MIN(o.currency), 'EUR'),
@@ -144,16 +179,15 @@ func (a *App) handleProduct(w http.ResponseWriter, r *http.Request) {
 		&product.LowestPrice, &product.Currency, &product.Available, &product.OfferCount,
 	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "product not found", "not_found", nil)
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "could not load product", "internal_error", nil)
-		return
+		return productDetail{}, err
 	}
 	product.Region = strings.TrimSpace(product.Region)
 	product.Currency = strings.TrimSpace(product.Currency)
+	return product, nil
+}
 
+func (a *App) loadOffersForProduct(r *http.Request, productID string) ([]offerView, error) {
+	//shows active offers for product and available keys from each seller
 	rows, err := a.db.QueryContext(r.Context(), `
 		SELECT o.id, s.name, s.rating, o.price_cents, o.currency,
 		       COUNT(dk.id) FILTER (WHERE oi.id IS NULL)::int
@@ -164,26 +198,23 @@ func (a *App) handleProduct(w http.ResponseWriter, r *http.Request) {
 		WHERE o.product_id = $1 AND o.active = TRUE
 		GROUP BY o.id, s.name, s.rating, o.price_cents, o.currency
 		ORDER BY o.price_cents, s.name
-	`, product.ID)
+	`, productID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load offers", "internal_error", nil)
-		return
+		return nil, err
 	}
 	defer rows.Close()
-	product.Offers = make([]offerView, 0)
+	offers := make([]offerView, 0)
 	for rows.Next() {
 		var offer offerView
 		if err := rows.Scan(&offer.ID, &offer.SellerName, &offer.SellerRating, &offer.PriceCents, &offer.Currency, &offer.AvailableKeys); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load offers", "internal_error", nil)
-			return
+			return nil, err
 		}
 		offer.Currency = strings.TrimSpace(offer.Currency)
 		offer.Available = offer.AvailableKeys > 0
-		product.Offers = append(product.Offers, offer)
+		offers = append(offers, offer)
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load offers", "internal_error", nil)
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, product)
+	return offers, nil
 }

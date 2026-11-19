@@ -16,12 +16,11 @@ type credentials struct {
 }
 
 func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
-	var input credentials
-	if err := decodeJSON(w, r, &input); err != nil {
+	input, err := decodeCredentials(w, r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body", "invalid_request", nil)
 		return
 	}
-	input.Email = normalizeEmail(input.Email)
 	parsed, err := mail.ParseAddress(input.Email)
 	if err != nil || parsed.Address != input.Email || len(input.Password) < 10 || len(input.Password) > 72 {
 		writeError(w, http.StatusBadRequest, "enter a valid email and a password between 10 and 72 bytes", "invalid_credentials", nil)
@@ -53,15 +52,14 @@ func (a *App) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var input credentials
-	if err := decodeJSON(w, r, &input); err != nil {
+	input, err := decodeCredentials(w, r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body", "invalid_request", nil)
 		return
 	}
-	input.Email = normalizeEmail(input.Email)
 	var current user
 	var passwordHash string
-	err := a.db.QueryRowContext(r.Context(), `
+	err = a.db.QueryRowContext(r.Context(), `
 		SELECT id, email, password_hash FROM users WHERE email = $1
 	`, input.Email).Scan(&current.ID, &current.Email, &passwordHash)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(input.Password)) != nil) {
@@ -90,6 +88,15 @@ func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": current})
+}
+
+func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentials, error) {
+	var input credentials
+	if err := decodeJSON(w, r, &input); err != nil {
+		return credentials{}, err
+	}
+	input.Email = normalizeEmail(input.Email)
+	return input, nil
 }
 
 func normalizeEmail(value string) string {

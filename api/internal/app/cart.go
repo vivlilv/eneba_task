@@ -31,6 +31,12 @@ type cartView struct {
 	HasPriceChanges bool           `json:"hasPriceChanges"`
 }
 
+type cartOfferState struct {
+	priceCents    int64
+	active        bool
+	availableKeys int
+}
+
 func (a *App) handleGetCart(w http.ResponseWriter, r *http.Request) {
 	current, ok := a.requireUser(w, r)
 	if !ok {
@@ -55,16 +61,7 @@ func (a *App) handleAddCartItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.OfferID = strings.TrimSpace(input.OfferID)
-	var currentPrice int64
-	var active bool
-	var available int
-	err := a.db.QueryRowContext(r.Context(), `
-		SELECT o.price_cents, o.active,
-		       (SELECT COUNT(*)::int FROM digital_keys dk
-		        WHERE dk.offer_id = o.id
-		          AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id))
-		FROM offers o WHERE o.id = $1
-	`, input.OfferID).Scan(&currentPrice, &active, &available)
+	offer, err := a.loadCartOfferState(r, input.OfferID)
 	if err == sql.ErrNoRows {
 		writeError(w, http.StatusNotFound, "offer not found", "offer_unavailable", nil)
 		return
@@ -73,15 +70,15 @@ func (a *App) handleAddCartItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not add offer", "internal_error", nil)
 		return
 	}
-	if !active {
+	if !offer.active {
 		writeError(w, http.StatusNotFound, "offer not found", "offer_unavailable", nil)
 		return
 	}
-	if currentPrice != input.PriceSeenCents {
-		writeError(w, http.StatusConflict, "the offer price has changed; review the new price before adding it", "price_changed", map[string]int64{"currentPriceCents": currentPrice})
+	if offer.priceCents != input.PriceSeenCents {
+		writeError(w, http.StatusConflict, "the offer price has changed; review the new price before adding it", "price_changed", map[string]int64{"currentPriceCents": offer.priceCents})
 		return
 	}
-	if available == 0 {
+	if offer.availableKeys == 0 {
 		writeError(w, http.StatusConflict, "this offer is out of stock", "out_of_stock", nil)
 		return
 	}
@@ -202,6 +199,21 @@ func (a *App) handleDeleteCartItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cart)
+}
+
+func (a *App) loadCartOfferState(r *http.Request, offerID string) (cartOfferState, error) {
+	var offer cartOfferState
+	err := a.db.QueryRowContext(r.Context(), `
+		SELECT o.price_cents, o.active,
+		       (SELECT COUNT(*)::int FROM digital_keys dk
+		        WHERE dk.offer_id = o.id
+		          AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id))
+		FROM offers o WHERE o.id = $1
+	`, offerID).Scan(&offer.priceCents, &offer.active, &offer.availableKeys)
+	if err != nil {
+		return cartOfferState{}, err
+	}
+	return offer, nil
 }
 
 func (a *App) loadCart(r *http.Request, userID int64) (cartView, error) {
