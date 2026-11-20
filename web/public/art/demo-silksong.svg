@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 820" fill="none">
+  <defs>
+    <linearGradient id="dusk" x1="0" y1="0" x2="640" y2="820" gradientUnits="userSpaceOnUse"><stop stop-color="#5C0F2E"/><stop offset=".45" stop-color="#A32344"/><stop offset="1" stop-color="#4A0B24"/></linearGradient>
+    <radialGradient id="moon" cx="0" cy="0" r="1" gradientTransform="matrix(0 170 -170 0 320 250)" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD9A0"/><stop offset="1" stop-color="#FFD9A0" stop-opacity="0"/></radialGradient>
+    <linearGradient id="wing" x1="320" y1="380" x2="320" y2="560" gradientUnits="userSpaceOnUse"><stop stop-color="#F7E6C4"/><stop offset="1" stop-color="#D9B071"/></linearGradient>
+  </defs>
+  <rect width="640" height="820" fill="url(#dusk)"/>
+  <circle cx="320" cy="250" r="170" fill="url(#moon)"/>
+  <circle cx="320" cy="250" r="66" fill="#FFE8BC"/>
+  <!-- silk threads -->
+  <path stroke="#F2C9C0" stroke-opacity=".5" stroke-width="2.5" d="M-20 620C120 500 200 700 340 560s240-40 320-160"/>
+  <path stroke="#F2C9C0" stroke-opacity=".35" stroke-width="2" d="M-20 700C160 640 240 760 380 660s180-40 280-140"/>
+  <path stroke="#F2C9C0" stroke-opacity=".6" stroke-width="2" d="M-20 300C120 200 260 380 380 280s160-60 280-160"/>
+  <!-- the moth dancer -->
+  <g>
+    <path fill="url(#wing)" d="M320 470c-52-58-118-70-152-52-26 14-24 52 8 84 26 26 74 40 118 30z"/>
+    <path fill="url(#wing)" d="M320 470c52-58 118-70 152-52 26 14 24 52-8 84-26 26-74 40-118 30z"/>
+    <path stroke="#B03A55" stroke-width="3" stroke-opacity=".8" d="M292 452c-20-14-40-20-56-18m212 18c20-14 40-20 56-18"/>
+    <circle cx="286" cy="452" r="7" fill="#5C0F2E"/><circle cx="354" cy="452" r="7" fill="#5C0F2E"/>
+    <path stroke="#5C0F2E" stroke-width="10" stroke-linecap="round" d="M320 462v18"/>
+    <path fill="#7A1B36" d="M320 480c-16 12-24 34-24 60s8 48 24 60 24-34 24-60-8-48-24-60Z"/>
+    <!-- antennae -->
+    <path stroke="#F7E6C4" stroke-width="4" stroke-linecap="round" d="M300 432c-10-14-24-22-38-24m76 24c10-14 24-22 38-24"/>
+    <circle cx="262" cy="408" r="5" fill="#F7E6C4"/><circle cx="378" cy="408" r="5" fill="#F7E6C4"/>
+  </g>
+  <!-- needle spires of the silk city -->
+  <path fill="#38071A" d="M0 820V660l70-160 24 46 40-96 30 66 56-150 36 92 64-190 40 130 60-120 44 92 66-56v402z"/>
+  <path fill="#240410" fill-opacity=".85" d="M0 820v-96l96-84 84 56 92-96 88 92 84-60 96 84 100-40 100 44v100z"/>
+  <!-- lantern windows -->
+  <circle cx="70" cy="640" r="4" fill="#FFD9A0" fill-opacity=".9"/><circle cx="196" cy="600" r="4" fill="#FFD9A0" fill-opacity=".9"/><circle cx="330" cy="560" r="5" fill="#FFD9A0" fill-opacity=".9"/><circle cx="560" cy="620" r="4" fill="#FFD9A0" fill-opacity=".9"/>
+  <!-- stars -->
+  <circle cx="90" cy="90" r="3" fill="#FFE8BC"/><circle cx="180" cy="150" r="2" fill="#FFE8BC"/><circle cx="480" cy="80" r="3" fill="#FFE8BC"/><circle cx="560" cy="180" r="2" fill="#FFE8BC"/><circle cx="120" cy="230" r="2" fill="#FFE8BC"/><circle cx="530" cy="320" r="3" fill="#FFE8BC" fill-opacity=".7"/>
+</svg>

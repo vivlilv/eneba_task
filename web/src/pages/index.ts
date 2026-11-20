@@ -1,0 +1,8 @@
+export { AuthPage } from './AuthPage'
+export { CartPage } from './CartPage'
+export { CheckoutPage } from './CheckoutPage'
+export { HomePage } from './HomePage'
+export { OrderPage } from './OrderPage'
+export { OrdersPage } from './OrdersPage'
+export { ProductPage } from './ProductPage'
+export { StorePage } from './StorePage'

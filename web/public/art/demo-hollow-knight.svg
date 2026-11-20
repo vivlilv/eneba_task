@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 820" fill="none">
+  <defs>
+    <linearGradient id="cave" x1="0" y1="0" x2="640" y2="820" gradientUnits="userSpaceOnUse"><stop stop-color="#0B1E2D"/><stop offset=".5" stop-color="#123B52"/><stop offset="1" stop-color="#050E16"/></linearGradient>
+    <radialGradient id="lantern" cx="0" cy="0" r="1" gradientTransform="matrix(250 0 0 250 320 400)" gradientUnits="userSpaceOnUse"><stop stop-color="#A9ECFF" stop-opacity=".5"/><stop offset="1" stop-color="#A9ECFF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="cloak" x1="320" y1="560" x2="320" y2="760" gradientUnits="userSpaceOnUse"><stop stop-color="#16425C"/><stop offset="1" stop-color="#0A2233"/></linearGradient>
+  </defs>
+  <rect width="640" height="820" fill="url(#cave)"/>
+  <!-- far cave arches -->
+  <path fill="#0D2C40" fill-opacity=".7" d="M-40 820V360c90-60 210-60 300 0s250 55 420-10v470z"/>
+  <circle cx="320" cy="400" r="250" fill="url(#lantern)"/>
+  <!-- stalactites -->
+  <path fill="#081B29" d="M0 0h640v56l-49 84-41-62-52 96-46-80-58 74-44-66-60 100-46-78-58 88-46-70-60 92-40-58v-66z"/>
+  <!-- stalagmites -->
+  <path fill="#081B29" d="M0 820V726l54-88 46 70 58-96 46 74 60-92 46 66 58-84 46 62 60-96 46 70 58-88 44 62 18-14v118z"/>
+  <!-- glowing fungi -->
+  <g>
+    <path fill="#1B5E7A" d="M92 684c-6-44 4-84 4-84s14 34 12 74z"/>
+    <path fill="#8FE3FF" d="M96 596c-22 8-34 24-34 24s22 12 46 6 34-22 34-22-22-14-46-8Zm-6 4c-10-18-4-36-4-36s16 14 20 32"/>
+    <path fill="#1B5E7A" d="M548 656c4-34-4-62-4-62s-12 26-10 58z"/>
+    <path fill="#8FE3FF" d="M544 590c18 6 28 18 28 18s-18 10-38 6-28-16-28-16 18-12 38-8Z"/>
+  </g>
+  <!-- the wanderer -->
+  <g>
+    <ellipse cx="320" cy="470" r="120" fill="#A9ECFF" fill-opacity=".14"/>
+    <path fill="url(#cloak)" d="M320 598c-40 0-64 46-78 122-8 42-10 58-10 58h176s-2-16-10-58c-14-76-38-122-78-122Z"/>
+    <ellipse cx="320" cy="548" rx="52" ry="58" fill="#EAF6FA"/>
+    <path stroke="#0B2233" stroke-width="10" stroke-linecap="round" d="M300 548c5 12 13 12 18 2m4 0c5 10 13 10 18-2"/>
+    <path fill="#EAF6FA" d="M312 494c-6 0-12 3-16 8 5 6 11 9 16 9s11-3 16-9c-4-5-10-8-16-8Zm16 0c6 0 12 3 16 8-5 6-11 9-16 9"/>
+    <path fill="#C7DEE8" d="M264 604c-16 10-24 26-24 26s20-4 34-14m88-12c16 10 24 26 24 26s-20-4-34-14"/>
+    <!-- the old nail at rest -->
+    <path stroke="#B9D8E4" stroke-width="12" stroke-linecap="round" d="m398 606 96-160"/>
+    <path fill="#8FB4C4" d="m486 458 22-26 4 34z"/>
+  </g>
+  <!-- drifting spores -->
+  <circle cx="150" cy="330" r="4" fill="#C9F2FF" fill-opacity=".8"/><circle cx="480" cy="270" r="3" fill="#C9F2FF" fill-opacity=".6"/><circle cx="240" cy="240" r="3" fill="#C9F2FF" fill-opacity=".5"/><circle cx="520" cy="470" r="4" fill="#C9F2FF" fill-opacity=".7"/><circle cx="110" cy="470" r="3" fill="#C9F2FF" fill-opacity=".6"/><circle cx="420" cy="720" r="3" fill="#C9F2FF" fill-opacity=".5"/><circle cx="200" cy="700" r="4" fill="#C9F2FF" fill-opacity=".45"/>
+</svg>
