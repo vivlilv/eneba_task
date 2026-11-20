@@ -4,7 +4,13 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+)
+
+const (
+	cheapGamesBlockKind       = "cheap_games"
+	cheapGamesPriceLimitCents = int64(1000)
 )
 
 type productCard struct {
@@ -43,6 +49,10 @@ func (a *App) handleHomepage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.attachBlockProducts(r, blocks, positionByBlockID); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load homepage products", "internal_error", nil)
+		return
+	}
+	if err := a.attachCheapGameProducts(r, blocks); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load cheap games", "internal_error", nil)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
@@ -93,7 +103,7 @@ func (a *App) attachBlockProducts(r *http.Request, blocks []homepageBlock, posit
 		       COUNT(DISTINCT o.id)::int
 		FROM homepage_blocks hb
 		JOIN homepage_block_products hbp ON hbp.block_id = hb.id
-		JOIN products p ON p.id = hbp.product_id
+		JOIN products p ON p.id = hbp.product_id AND p.listed = TRUE
 		LEFT JOIN offers o ON o.product_id = p.id AND o.active = TRUE
 		GROUP BY hb.id, hb.position, hbp.position, p.id
 		ORDER BY hb.position, hbp.position
@@ -119,6 +129,133 @@ func (a *App) attachBlockProducts(r *http.Request, blocks []homepageBlock, posit
 		}
 	}
 	return rows.Err()
+}
+
+// attachCheapGameProducts selects currently purchasable Products whose cheapest
+// in-stock Offer is below the homepage's ten-euro limit.
+func (a *App) attachCheapGameProducts(r *http.Request, blocks []homepageBlock) error {
+	cheapBlockPositions := make([]int, 0)
+	for position, block := range blocks {
+		if block.Kind == cheapGamesBlockKind {
+			cheapBlockPositions = append(cheapBlockPositions, position)
+		}
+	}
+	if len(cheapBlockPositions) == 0 {
+		return nil
+	}
+
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT p.id, p.slug, p.title, p.edition, p.platform, p.region, p.category,
+		       MIN(o.price_cents), MIN(o.currency), TRUE, COUNT(DISTINCT o.id)::int
+		FROM products p
+		JOIN offers o ON o.product_id = p.id AND o.active = TRUE
+		WHERE p.listed = TRUE
+		  AND EXISTS (
+		      SELECT 1 FROM digital_keys dk
+		      WHERE dk.offer_id = o.id
+		        AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id)
+		  )
+		GROUP BY p.id
+		HAVING MIN(o.price_cents) < $1
+		ORDER BY MIN(o.price_cents), p.title
+	`, cheapGamesPriceLimitCents)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var product productCard
+		if err := rows.Scan(
+			&product.ID, &product.Slug, &product.Title, &product.Edition,
+			&product.Platform, &product.Region, &product.Category,
+			&product.LowestPrice, &product.Currency, &product.Available, &product.OfferCount,
+		); err != nil {
+			return err
+		}
+		product.Region = strings.TrimSpace(product.Region)
+		product.Currency = strings.TrimSpace(product.Currency)
+		for _, position := range cheapBlockPositions {
+			blocks[position].Products = append(blocks[position].Products, product)
+		}
+	}
+	return rows.Err()
+}
+
+// handleSearch searches the full catalog so discovery does not depend on which
+// products happen to be assigned to homepage blocks.
+func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(query)) > 100 {
+		writeError(w, http.StatusBadRequest, "search query is too long", "invalid_query", nil)
+		return
+	}
+
+	limit := 100
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > 100 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 100", "invalid_limit", nil)
+			return
+		}
+		limit = parsedLimit
+	}
+
+	products, err := a.searchProducts(r, query, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not search products", "internal_error", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"products": products})
+}
+
+func (a *App) searchProducts(r *http.Request, query string, limit int) ([]productCard, error) {
+	rows, err := a.db.QueryContext(r.Context(), `
+		SELECT p.id, p.slug, p.title, p.edition, p.platform, p.region, p.category,
+		       COALESCE(MIN(o.price_cents), 0), COALESCE(MIN(o.currency), 'EUR'),
+		       COALESCE(BOOL_OR(EXISTS (
+		           SELECT 1 FROM digital_keys dk
+		           WHERE dk.offer_id = o.id
+		             AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.digital_key_id = dk.id)
+		       )), FALSE),
+		       COUNT(DISTINCT o.id)::int
+		FROM products p
+		LEFT JOIN offers o ON o.product_id = p.id AND o.active = TRUE
+		WHERE p.listed = TRUE
+		  AND ($1 = ''
+		   OR p.title ILIKE '%' || $1 || '%'
+		   OR (length($1) >= 4 AND (lower(p.title) % lower($1) OR lower(p.title) %> lower($1))))
+		GROUP BY p.id
+		ORDER BY
+			CASE WHEN $1 = '' THEN 0
+			     WHEN lower(p.title) = lower($1) THEN 0
+			     WHEN lower(p.title) LIKE lower($1) || '%' THEN 1
+			     WHEN lower(p.title) LIKE '%' || lower($1) || '%' THEN 2
+			     ELSE 3 END,
+			GREATEST(similarity(lower(p.title), lower($1)), word_similarity(lower($1), lower(p.title))) DESC,
+			p.title
+		LIMIT $2
+	`, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	products := make([]productCard, 0)
+	for rows.Next() {
+		var product productCard
+		if err := rows.Scan(
+			&product.ID, &product.Slug, &product.Title, &product.Edition,
+			&product.Platform, &product.Region, &product.Category,
+			&product.LowestPrice, &product.Currency, &product.Available, &product.OfferCount,
+		); err != nil {
+			return nil, err
+		}
+		product.Region = strings.TrimSpace(product.Region)
+		product.Currency = strings.TrimSpace(product.Currency)
+		products = append(products, product)
+	}
+	return products, rows.Err()
 }
 
 type offerView struct {
@@ -171,7 +308,7 @@ func (a *App) loadProductSummary(r *http.Request, slug string) (productDetail, e
 		       COUNT(DISTINCT o.id)::int
 		FROM products p
 		LEFT JOIN offers o ON o.product_id = p.id AND o.active = TRUE
-		WHERE p.slug = $1
+		WHERE p.slug = $1 AND p.listed = TRUE
 		GROUP BY p.id
 	`, slug).Scan(
 		&product.ID, &product.Slug, &product.Title, &product.Edition, &product.Platform,

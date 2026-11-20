@@ -28,6 +28,14 @@ const defaultTestDBURL = "postgres://eneba:eneba_dev@127.0.0.1:5432/eneba?sslmod
 // database. It fails if a reachable server cannot set up the database and
 // skips if PostgreSQL is unavailable.
 func newTestAppWithScratchDatabase(t *testing.T) *App {
+	return newScratchDatabaseApp(t, true)
+}
+
+func newTestAppWithSeededScratchDatabase(t *testing.T) *App {
+	return newScratchDatabaseApp(t, false)
+}
+
+func newScratchDatabaseApp(t *testing.T, clearSeedData bool) *App {
 	t.Helper()
 
 	adminURL := defaultTestDBURL
@@ -70,7 +78,9 @@ func newTestAppWithScratchDatabase(t *testing.T) *App {
 	if err := migrations.Up(ctx, db); err != nil {
 		t.Fatalf("apply migrations to scratch database: %v", err)
 	}
-	clearTestTables(t, db)
+	if clearSeedData {
+		clearTestTables(t, db)
+	}
 	return New(db, false)
 }
 

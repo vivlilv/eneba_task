@@ -45,6 +45,7 @@ func (a *App) Handler() http.Handler {
 func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/health", a.handleHealth)
 	a.mux.HandleFunc("GET /api/homepage", a.handleHomepage)
+	a.mux.HandleFunc("GET /api/search", a.handleSearch)
 	a.mux.HandleFunc("GET /api/products/{slug}", a.handleProduct)
 	a.mux.HandleFunc("GET /api/offers/{offerID}", a.handleOfferPreview)
 	a.mux.HandleFunc("POST /api/auth/register", a.handleRegister)
