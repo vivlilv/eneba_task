@@ -15,7 +15,8 @@ import (
 
 func main() {
 	databaseURL := env("DATABASE_URL", "postgres://eneba:eneba_dev@localhost:5432/eneba?sslmode=disable")
-	addr := env("API_ADDR", ":8080")
+	migrationURL := env("DATABASE_URL_UNPOOLED", databaseURL)
+	addr := env("API_ADDR", ":"+env("PORT", "8080"))
 	cookieSecure := env("SESSION_COOKIE_SECURE", "false") == "true"
 
 	db, err := sql.Open("pgx", databaseURL)
@@ -29,11 +30,28 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("connect to PostgreSQL: %v", err)
+
+	migrationDB := db
+	if migrationURL != databaseURL {
+		migrationDB, err = sql.Open("pgx", migrationURL)
+		if err != nil {
+			log.Fatalf("open migration database: %v", err)
+		}
+		defer migrationDB.Close()
 	}
-	if err := migrations.Up(ctx, db); err != nil {
+	if err := migrationDB.PingContext(ctx); err != nil {
+		log.Fatalf("connect to PostgreSQL for migrations: %v", err)
+	}
+	if err := migrations.Up(ctx, migrationDB); err != nil {
 		log.Fatalf("apply database migrations: %v", err)
+	}
+	if migrationDB != db {
+		if err := db.PingContext(ctx); err != nil {
+			log.Fatalf("connect to PostgreSQL: %v", err)
+		}
+		if err := migrationDB.Close(); err != nil {
+			log.Printf("close migration database: %v", err)
+		}
 	}
 
 	server := &http.Server{

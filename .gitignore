@@ -9,4 +9,7 @@
 
 # Local configuration
 .env
+.env.local
 .env.*.local
+.neon
+node_modules/
