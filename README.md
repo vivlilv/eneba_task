@@ -8,6 +8,10 @@ A deliberately narrow marketplace slice for the Eneba internship assignment. The
 - Go REST API (`api/`)
 - PostgreSQL, with Docker Compose for local development (`compose.yaml`)
 
+## See IT live
+
+https://eneba-task-one.vercel.app/
+
 ## Run locally
 
 Start the local database:
