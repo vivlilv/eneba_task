@@ -41,6 +41,3 @@ Open the Vite URL (normally `http://localhost:5173`). Vite proxies `/api` reques
 
 Local defaults are for development only. To load overrides from `.env.example`, copy it to `.env` and export it in your shell (`set -a; source .env; set +a`). Do not reuse the demo database password or demo keys in production.
 
-## Current boundary
-
-The homepage is the only product discovery surface. A browse-all catalog, search, filtering, sorting, seller management, and real payment are intentionally outside this slice. The public free-tier deployment target is not selected yet.
