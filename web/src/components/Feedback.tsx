@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 export function NotFoundPage() {
-  return <EmptyState title="Page not found" body="That page isn't part of this demo." action={<Link className="button button-primary" to="/">Go home</Link>} />
+  return <EmptyState title="Oops! This page isn't here." body="It may have moved, or the link may be wrong." action={<Link className="button button-primary" to="/">Go home</Link>} />
 }
 
 export function Loading({ label }: { label: string }) {
